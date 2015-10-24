@@ -1,5 +1,7 @@
 # Cleanflight
 
+REMINDER FOR MYSELF: This branch sends Cleanflight's internal flags and telemetry to Smartport. Also PID values. Requires the special LUA script.
+
 Clean-code version of baseflight flight-controller - flight controllers are used to fly multi-rotor craft and fixed wing craft.
 
 This fork differs from baseflight in that it attempts to use modern software development practices which result in:
