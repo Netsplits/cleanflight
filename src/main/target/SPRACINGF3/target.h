@@ -30,7 +30,7 @@
 
 #define USABLE_TIMER_CHANNEL_COUNT 17
 
-#define EXTI15_10_CALLBACK_HANDLER_COUNT 2 // MPU data ready and MAG data ready
+#define EXTI_CALLBACK_HANDLER_COUNT 2 // MPU data ready and MAG data ready
 
 #define USE_MPU_DATA_READY_SIGNAL
 #define ENSURE_MPU_DATA_READY_IS_LOW
@@ -51,6 +51,7 @@
 #define USE_BARO_MS5611
 
 #define MAG
+#define USE_MAG_AK8975
 #define USE_MAG_HMC5883
 #define MAG_HMC5883_ALIGN CW270_DEG
 
@@ -64,7 +65,9 @@
 #define USE_USART1
 #define USE_USART2
 #define USE_USART3
-#define SERIAL_PORT_COUNT 3
+#define USE_SOFTSERIAL1
+#define USE_SOFTSERIAL2
+#define SERIAL_PORT_COUNT 5
 
 #ifndef UART1_GPIO
 #define UART1_TX_PIN        GPIO_Pin_9  // PA9
@@ -90,6 +93,13 @@
 #define UART3_TX_PINSOURCE  GPIO_PinSource10
 #define UART3_RX_PINSOURCE  GPIO_PinSource11
 #endif
+
+#define SOFTSERIAL_1_TIMER TIM3
+#define SOFTSERIAL_1_TIMER_RX_HARDWARE 4 // PWM 5
+#define SOFTSERIAL_1_TIMER_TX_HARDWARE 5 // PWM 6
+#define SOFTSERIAL_2_TIMER TIM3
+#define SOFTSERIAL_2_TIMER_RX_HARDWARE 6 // PWM 7
+#define SOFTSERIAL_2_TIMER_TX_HARDWARE 7 // PWM 8
 
 #define USE_I2C
 #define I2C_DEVICE (I2CDEV_1) // PB6/SCL, PB7/SDA
@@ -146,11 +156,16 @@
 #define WS2811_DMA_CHANNEL              DMA1_Channel2
 #define WS2811_IRQ                      DMA1_Channel2_IRQn
 
-#define GPS
 #define BLACKBOX
-#define TELEMETRY
-#define SERIAL_RX
-#define AUTOTUNE
 #define DISPLAY
+#define GPS
+#define GTUNE
+#define SERIAL_RX
+#define TELEMETRY
 #define USE_SERVOS
 #define USE_CLI
+
+#define SPEKTRUM_BIND
+// USART3,
+#define BIND_PORT  GPIOB
+#define BIND_PIN   Pin_11

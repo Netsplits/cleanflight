@@ -25,6 +25,7 @@
 #include "common/maths.h"
 #include "common/axis.h"
 #include "common/color.h"
+#include "common/utils.h"
 
 #include "drivers/sensor.h"
 #include "drivers/accgyro.h"
@@ -70,8 +71,9 @@
 #include "flight/imu.h"
 #include "flight/altitudehold.h"
 #include "flight/failsafe.h"
-#include "flight/autotune.h"
+#include "flight/gtune.h"
 #include "flight/navigation.h"
+#include "flight/filter.h"
 
 
 #include "config/runtime_config.h"
@@ -87,8 +89,10 @@ enum {
     ALIGN_MAG = 2
 };
 
-/* for VBAT monitoring frequency */
-#define VBATFREQ 6        // to read battery voltage - nth number of loop iterations
+/* VBAT monitoring interval (in microseconds) - 1s*/
+#define VBATINTERVAL (6 * 3500)       
+/* IBat monitoring interval (in microseconds) - 6 default looptimes */
+#define IBATINTERVAL (6 * 3500)       
 
 uint32_t currentTime = 0;
 uint32_t previousTime = 0;
@@ -104,6 +108,8 @@ static uint32_t disarmAt;     // Time of automatic disarm when "Don't spin the m
 
 extern uint8_t dynP8[3], dynI8[3], dynD8[3], PIDweight[3];
 
+static bool isRXDataNew;
+
 typedef void (*pidControllerFuncPtr)(pidProfile_t *pidProfile, controlRateConfig_t *controlRateConfig,
         uint16_t max_angle_inclination, rollAndPitchTrims_t *angleTrim, rxConfig_t *rxConfig);            // pid controller function prototype
 
@@ -117,40 +123,26 @@ void applyAndSaveAccelerometerTrimsDelta(rollAndPitchTrims_t *rollAndPitchTrimsD
     saveConfigAndNotify();
 }
 
-#ifdef AUTOTUNE
+#ifdef GTUNE
 
-void updateAutotuneState(void)
+void updateGtuneState(void)
 {
-    static bool landedAfterAutoTuning = false;
-    static bool autoTuneWasUsed = false;
+    static bool GTuneWasUsed = false;
 
-    if (IS_RC_MODE_ACTIVE(BOXAUTOTUNE)) {
-        if (!FLIGHT_MODE(AUTOTUNE_MODE)) {
-            if (ARMING_FLAG(ARMED)) {
-                if (isAutotuneIdle() || landedAfterAutoTuning) {
-                    autotuneReset();
-                    landedAfterAutoTuning = false;
-                }
-                autotuneBeginNextPhase(&currentProfile->pidProfile);
-                ENABLE_FLIGHT_MODE(AUTOTUNE_MODE);
-                autoTuneWasUsed = true;
-            } else {
-                if (havePidsBeenUpdatedByAutotune()) {
-                    saveConfigAndNotify();
-                    autotuneReset();
-                }
-            }
+    if (IS_RC_MODE_ACTIVE(BOXGTUNE)) {
+        if (!FLIGHT_MODE(GTUNE_MODE) && ARMING_FLAG(ARMED)) {
+            ENABLE_FLIGHT_MODE(GTUNE_MODE);
+            init_Gtune(&currentProfile->pidProfile);
+            GTuneWasUsed = true;
         }
-        return;
-    }
-
-    if (FLIGHT_MODE(AUTOTUNE_MODE)) {
-        autotuneEndPhase();
-        DISABLE_FLIGHT_MODE(AUTOTUNE_MODE);
-    }
-
-    if (!ARMING_FLAG(ARMED) && autoTuneWasUsed) {
-        landedAfterAutoTuning = true;
+        if (!FLIGHT_MODE(GTUNE_MODE) && !ARMING_FLAG(ARMED) && GTuneWasUsed) {
+            saveConfigAndNotify();
+            GTuneWasUsed = false;
+        }
+    } else {
+        if (FLIGHT_MODE(GTUNE_MODE) && ARMING_FLAG(ARMED)) {
+    	    DISABLE_FLIGHT_MODE(GTUNE_MODE);
+        }
     }
 }
 #endif
@@ -173,10 +165,8 @@ void annexCode(void)
     int32_t tmp, tmp2;
     int32_t axis, prop1 = 0, prop2;
 
-    static batteryState_e batteryState = BATTERY_OK;
-    static uint8_t vbatTimer = 0;
-    static int32_t vbatCycleTime = 0;
-
+    static uint32_t vbatLastServiced = 0;
+    static uint32_t ibatLastServiced = 0;
     // PITCH & ROLL only dynamic PID adjustment,  depending on throttle value
     if (rcData[THROTTLE] < currentControlRateProfile->tpa_breakpoint) {
         prop2 = 100;
@@ -239,31 +229,26 @@ void annexCode(void)
 
     if (FLIGHT_MODE(HEADFREE_MODE)) {
         float radDiff = degreesToRadians(heading - headFreeModeHold);
-        float cosDiff = cosf(radDiff);
-        float sinDiff = sinf(radDiff);
+        float cosDiff = cos_approx(radDiff);
+        float sinDiff = sin_approx(radDiff);
         int16_t rcCommand_PITCH = rcCommand[PITCH] * cosDiff + rcCommand[ROLL] * sinDiff;
         rcCommand[ROLL] = rcCommand[ROLL] * cosDiff - rcCommand[PITCH] * sinDiff;
         rcCommand[PITCH] = rcCommand_PITCH;
     }
 
-    if (feature(FEATURE_VBAT | FEATURE_CURRENT_METER)) {
-        vbatCycleTime += cycleTime;
-        if (!(++vbatTimer % VBATFREQ)) {
+    if (feature(FEATURE_VBAT)) {
+        if (cmp32(currentTime, vbatLastServiced) >= VBATINTERVAL) {
+            vbatLastServiced = currentTime;
+            updateBattery();
+        }
+    }
 
-            if (feature(FEATURE_VBAT)) {
-                updateBatteryVoltage();
-                batteryState = calculateBatteryState();
-                //handle beepers for battery levels
-                if (batteryState == BATTERY_CRITICAL)
-                    beeper(BEEPER_BAT_CRIT_LOW);    //critically low battery
-                else if (batteryState == BATTERY_WARNING)
-                    beeper(BEEPER_BAT_LOW);         //low battery
-            }
+    if (feature(FEATURE_CURRENT_METER)) {
+        int32_t ibatTimeSinceLastServiced = cmp32(currentTime, ibatLastServiced);
 
-            if (feature(FEATURE_CURRENT_METER)) {
-                updateCurrentMeter(vbatCycleTime, &masterConfig.rxConfig, masterConfig.flight3DConfig.deadband3d_throttle);
-            }
-            vbatCycleTime = 0;
+        if (ibatTimeSinceLastServiced >= IBATINTERVAL) {
+            ibatLastServiced = currentTime;
+            updateCurrentMeter(ibatTimeSinceLastServiced, &masterConfig.rxConfig, masterConfig.flight3DConfig.deadband3d_throttle);
         }
     }
 
@@ -277,10 +262,6 @@ void annexCode(void)
         }
 
         if (!STATE(SMALL_ANGLE)) {
-            DISABLE_ARMING_FLAG(OK_TO_ARM);
-        }
-
-        if (IS_RC_MODE_ACTIVE(BOXAUTOTUNE)) {
             DISABLE_ARMING_FLAG(OK_TO_ARM);
         }
 
@@ -299,7 +280,7 @@ void annexCode(void)
     }
 
 #ifdef TELEMETRY
-    checkTelemetryState();
+    telemetryCheckState();
 #endif
 
     handleSerial();
@@ -332,10 +313,21 @@ void mwDisarm(void)
 
 #define TELEMETRY_FUNCTION_MASK (FUNCTION_TELEMETRY_FRSKY | FUNCTION_TELEMETRY_HOTT | FUNCTION_TELEMETRY_MSP | FUNCTION_TELEMETRY_SMARTPORT)
 
+void releaseSharedTelemetryPorts(void) {
+    serialPort_t *sharedPort = findSharedSerialPort(TELEMETRY_FUNCTION_MASK, FUNCTION_MSP);
+    while (sharedPort) {
+        mspReleasePortIfAllocated(sharedPort);
+        sharedPort = findNextSharedSerialPort(TELEMETRY_FUNCTION_MASK, FUNCTION_MSP);
+    }
+}
+
 void mwArm(void)
 {
     if (ARMING_FLAG(OK_TO_ARM)) {
         if (ARMING_FLAG(ARMED)) {
+            return;
+        }
+        if (IS_RC_MODE_ACTIVE(BOXFAILSAFE)) {
             return;
         }
         if (!ARMING_FLAG(PREVENT_ARMING)) {
@@ -468,16 +460,14 @@ void executePeriodicTasks(void)
 
 #if defined(BARO) || defined(SONAR)
     case CALCULATE_ALTITUDE_TASK:
-
-#if defined(BARO) && !defined(SONAR)
-        if (sensors(SENSOR_BARO) && isBaroReady()) {
+        if (false
+#if defined(BARO)
+            || (sensors(SENSOR_BARO) && isBaroReady())
 #endif
-#if defined(BARO) && defined(SONAR)
-        if ((sensors(SENSOR_BARO) && isBaroReady()) || sensors(SENSOR_SONAR)) {
+#if defined(SONAR)
+            || sensors(SENSOR_SONAR)
 #endif
-#if !defined(BARO) && defined(SONAR)
-        if (sensors(SENSOR_SONAR)) {
-#endif
+            ) {
             calculateEstimatedAltitude(currentTime);
         }
         break;
@@ -662,22 +652,54 @@ void processRx(void)
     }
 
 #ifdef TELEMETRY
-	if (feature(FEATURE_TELEMETRY)) {
-		if ((!masterConfig.telemetryConfig.telemetry_switch && ARMING_FLAG(ARMED)) ||
-		    (masterConfig.telemetryConfig.telemetry_switch && IS_RC_MODE_ACTIVE(BOXTELEMETRY))) {
-			serialPort_t *sharedPort = findSharedSerialPort(TELEMETRY_FUNCTION_MASK, FUNCTION_MSP);
-			while (sharedPort) {
-				mspReleasePortIfAllocated(sharedPort);
-				sharedPort = findNextSharedSerialPort(TELEMETRY_FUNCTION_MASK, FUNCTION_MSP);
-			}
-		} else {
+    if (feature(FEATURE_TELEMETRY)) {
+        if ((!masterConfig.telemetryConfig.telemetry_switch && ARMING_FLAG(ARMED)) ||
+                (masterConfig.telemetryConfig.telemetry_switch && IS_RC_MODE_ACTIVE(BOXTELEMETRY))) {
+
+            releaseSharedTelemetryPorts();
+        } else {
             // the telemetry state must be checked immediately so that shared serial ports are released.
-            checkTelemetryState();
+            telemetryCheckState();
             mspAllocateSerialPorts(&masterConfig.serialConfig);
-		}
-	}
+        }
+    }
 #endif
 
+}
+
+void filterRc(void){
+    static int16_t lastCommand[4] = { 0, 0, 0, 0 };
+    static int16_t deltaRC[4] = { 0, 0, 0, 0 };
+    static int16_t factor, rcInterpolationFactor;
+    static filterStatePt1_t filteredCycleTimeState;
+    uint16_t rxRefreshRate, filteredCycleTime;
+
+    // Set RC refresh rate for sampling and channels to filter
+   	initRxRefreshRate(&rxRefreshRate);
+
+    filteredCycleTime = filterApplyPt1(cycleTime, &filteredCycleTimeState, 1);
+    rcInterpolationFactor = rxRefreshRate / filteredCycleTime + 1;
+
+    if (isRXDataNew) {
+        for (int channel=0; channel < 4; channel++) {
+        	deltaRC[channel] = rcData[channel] -  (lastCommand[channel] - deltaRC[channel] * factor / rcInterpolationFactor);
+            lastCommand[channel] = rcData[channel];
+        }
+
+        isRXDataNew = false;
+        factor = rcInterpolationFactor - 1;
+    } else {
+        factor--;
+    }
+
+    // Interpolate steps of rcData
+    if (factor > 0) {
+        for (int channel=0; channel < 4; channel++) {
+            rcData[channel] = lastCommand[channel] - deltaRC[channel] * factor/rcInterpolationFactor;
+         }
+    } else {
+        factor = 0;
+    }
 }
 
 void loop(void)
@@ -691,6 +713,7 @@ void loop(void)
 
     if (shouldProcessRx(currentTime)) {
         processRx();
+        isRXDataNew = true;
 
 #ifdef BARO
         // the 'annexCode' initialses rcCommand, updateAltHoldState depends on valid rcCommand data.
@@ -735,19 +758,33 @@ void loop(void)
         cycleTime = (int32_t)(currentTime - previousTime);
         previousTime = currentTime;
 
+        // Gyro Low Pass
+        if (currentProfile->pidProfile.gyro_cut_hz) {
+            int axis;
+            static filterStatePt1_t gyroADCState[XYZ_AXIS_COUNT];
+
+            for (axis = 0; axis < XYZ_AXIS_COUNT; axis++) {
+        	    gyroADC[axis] = filterApplyPt1(gyroADC[axis], &gyroADCState[axis], currentProfile->pidProfile.gyro_cut_hz);
+            }
+        }
+
+        if (masterConfig.rxConfig.rcSmoothing) {
+            filterRc();
+        }
+
         annexCode();
 #if defined(BARO) || defined(SONAR)
         haveProcessedAnnexCodeOnce = true;
-#endif
-
-#ifdef AUTOTUNE
-        updateAutotuneState();
 #endif
 
 #ifdef MAG
         if (sensors(SENSOR_MAG)) {
         	updateMagHold();
         }
+#endif
+
+#ifdef GTUNE
+        updateGtuneState();
 #endif
 
 #if defined(BARO) || defined(SONAR)
@@ -764,7 +801,7 @@ void loop(void)
         // Allow yaw control for tricopters if the user wants the servo to move even when unarmed.
         if (isUsingSticksForArming() && rcData[THROTTLE] <= masterConfig.rxConfig.mincheck
 #ifndef USE_QUAD_MIXER_ONLY
-                && !(masterConfig.mixerMode == MIXER_TRI && masterConfig.mixerConfig.tri_unarmed_servo)
+                && !((masterConfig.mixerMode == MIXER_TRI || masterConfig.mixerMode == MIXER_CUSTOM_TRI) && masterConfig.mixerConfig.tri_unarmed_servo)
                 && masterConfig.mixerMode != MIXER_AIRPLANE
                 && masterConfig.mixerMode != MIXER_FLYING_WING
 #endif
@@ -814,7 +851,7 @@ void loop(void)
 
 #ifdef TELEMETRY
     if (!cliMode && feature(FEATURE_TELEMETRY)) {
-        handleTelemetry(&masterConfig.rxConfig, masterConfig.flight3DConfig.deadband3d_throttle);
+        telemetryProcess(&masterConfig.rxConfig, masterConfig.flight3DConfig.deadband3d_throttle);
     }
 #endif
 

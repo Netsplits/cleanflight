@@ -28,6 +28,7 @@
 
 #include "common/maths.h"
 #include "common/axis.h"
+#include "common/utils.h"
 
 #include "drivers/system.h"
 #include "drivers/serial.h"
@@ -98,7 +99,7 @@ static gpsConfig_t *gpsConfig;
 static serialConfig_t *serialConfig;
 static serialPort_t *gpsPort;
 
-typedef struct gpsInitData_t {
+typedef struct gpsInitData_s {
     uint8_t index;
     uint8_t baudrateIndex; // see baudRate_e
     const char *ubx;
@@ -169,14 +170,14 @@ static const ubloxSbas_t ubloxSbas[] = {
 };
 
 
-enum {
+typedef enum {
     GPS_UNKNOWN,
     GPS_INITIALIZING,
     GPS_CHANGE_BAUD,
     GPS_CONFIGURE,
     GPS_RECEIVING_DATA,
     GPS_LOST_COMMUNICATION,
-};
+} gpsState_e;
 
 gpsData_t gpsData;
 
@@ -185,7 +186,7 @@ static void shiftPacketLog(void)
 {
     uint32_t i;
 
-    for (i = sizeof(gpsPacketLog) - 1; i > 0 ; i--) {
+    for (i = ARRAYLEN(gpsPacketLog) - 1; i > 0 ; i--) {
         gpsPacketLog[i] = gpsPacketLog[i-1];
     }
 }
@@ -194,7 +195,7 @@ static void gpsNewData(uint16_t c);
 static bool gpsNewFrameNMEA(char c);
 static bool gpsNewFrameUBLOX(uint8_t data);
 
-static void gpsSetState(uint8_t state)
+static void gpsSetState(gpsState_e state)
 {
     gpsData.state = state;
     gpsData.state_position = 0;
@@ -237,7 +238,7 @@ void gpsInit(serialConfig_t *initialSerialConfig, gpsConfig_t *initialGpsConfig)
     portMode_t mode = MODE_RXTX;
     // only RX is needed for NMEA-style GPS
     if (gpsConfig->provider == GPS_NMEA)
-        mode &= ~MODE_TX;
+	    mode &= ~MODE_TX;
 
     // no callback - buffer will be consumed in gpsThread()
     gpsPort = openSerialPort(gpsPortConfig->identifier, FUNCTION_GPS, NULL, gpsInitData[gpsData.baudrateIndex].baudrateIndex, mode, SERIAL_NOT_INVERTED);
@@ -359,7 +360,7 @@ void gpsThread(void)
 {
     // read out available GPS bytes
     if (gpsPort) {
-        while (serialTotalBytesWaiting(gpsPort))
+        while (serialRxBytesWaiting(gpsPort))
             gpsNewData(serialRead(gpsPort));
     }
 
@@ -1035,14 +1036,14 @@ void gpsEnablePassthrough(serialPort_t *gpsPassthroughPort)
 #endif
     char c;
     while(1) {
-        if (serialTotalBytesWaiting(gpsPort)) {
+        if (serialRxBytesWaiting(gpsPort)) {
             LED0_ON;
             c = serialRead(gpsPort);
             gpsNewData(c);
             serialWrite(gpsPassthroughPort, c);
             LED0_OFF;
         }
-        if (serialTotalBytesWaiting(gpsPassthroughPort)) {
+        if (serialRxBytesWaiting(gpsPassthroughPort)) {
             LED1_ON;
             serialWrite(gpsPort, serialRead(gpsPassthroughPort));
             LED1_OFF;

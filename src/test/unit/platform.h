@@ -20,6 +20,7 @@
 #define MAG
 #define BARO
 #define GPS
+#define DISPLAY
 #define TELEMETRY
 #define LED_STRIP
 #define USE_SERVOS
@@ -31,6 +32,7 @@
 typedef enum
 {
     Mode_TEST = 0x0,
+    Mode_Out_PP = 0x10,
 } GPIO_Mode;
 
 typedef struct
@@ -45,3 +47,4 @@ typedef struct
 
 typedef enum {DISABLE = 0, ENABLE = !DISABLE} FunctionalState;
 
+typedef enum {TEST_IRQ = 0 } IRQn_Type;

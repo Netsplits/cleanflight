@@ -3,8 +3,7 @@
 **
 **  File        : stm32_flash.ld
 **
-**  Abstract    : Linker script for STM32F103CB Device with
-**                128KByte FLASH, 20KByte RAM
+**  Abstract    : Common linker script for STM32 devices.
 **
 *****************************************************************************
 */
@@ -13,20 +12,11 @@
 ENTRY(Reset_Handler)
 
 /* Highest address of the user mode stack */
-_estack = 0x20005000;    /* end of 20K RAM */
+_estack = ORIGIN(RAM) + LENGTH(RAM);    /* end of RAM */
 
 /* Generate a link error if heap and stack don't fit into RAM */
 _Min_Heap_Size = 0;      /* required amount of heap  */
 _Min_Stack_Size = 0x400; /* required amount of stack */
-
-/* Specify the memory areas. Flash is limited for last 2K for configuration storage */
-MEMORY
-{
-  FLASH (rx)      : ORIGIN = 0x08003000, LENGTH = 126K - 0x03000 /* last 2kb used for config storage first 12k for OP Bootloader*/
-
-  RAM (xrw)       : ORIGIN = 0x20000000, LENGTH = 20K
-  MEMORY_B1 (rx)  : ORIGIN = 0x60000000, LENGTH = 0K
-}
 
 /* Define output sections */
 SECTIONS
@@ -111,7 +101,7 @@ SECTIONS
     _sbss = .;         /* define a global symbol at bss start */
     __bss_start__ = _sbss;
     *(.bss)
-    *(.bss*)
+    *(SORT_BY_ALIGNMENT(.bss*))
     *(COMMON)
 
     . = ALIGN(4);

@@ -44,15 +44,18 @@
 
 #define USABLE_TIMER_CHANNEL_COUNT 12
 
+#define DEBUG_MPU_DATA_READY_INTERRUPT
+#define USE_MPU_DATA_READY_SIGNAL
+
 #define GYRO
 #define USE_GYRO_SPI_MPU6000
 
-#define GYRO_SPI_MPU6000_ALIGN CW270_DEG
+#define GYRO_MPU6000_ALIGN CW270_DEG
 
 #define ACC
 #define USE_ACC_SPI_MPU6000
 
-#define ACC_SPI_MPU6000_ALIGN CW270_DEG
+#define ACC_MPU6000_ALIGN CW270_DEG
 
 // External I2C BARO
 #define BARO
@@ -112,16 +115,8 @@
 #define TELEMETRY
 #define SERIAL_RX
 #define SONAR
-#define AUTOTUNE
 #define USE_SERVOS
 #define USE_CLI
-
-#if defined(OPBL)
-// disabled some features for OPBL build due to code size.
-#undef AUTOTUNE
-#undef SONAR
-#endif
-
 
 #define SPEKTRUM_BIND
 // USART3, PB11 (Flexport)

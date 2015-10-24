@@ -83,7 +83,7 @@ static uint8_t ppmFrameCount = 0;
 static uint8_t lastPPMFrameCount = 0;
 static uint8_t ppmCountShift = 0;
 
-typedef struct ppmDevice {
+typedef struct ppmDevice_s {
     uint8_t  pulseIndex;
     uint32_t previousTime;
     uint32_t currentTime;
@@ -106,7 +106,6 @@ ppmDevice_t ppmDev;
 #define PPM_STABLE_FRAMES_REQUIRED_COUNT    25
 #define PPM_IN_MIN_NUM_CHANNELS     4
 #define PPM_IN_MAX_NUM_CHANNELS     PWM_PORTS_OR_PPM_CAPTURE_COUNT
-#define PPM_RCVR_TIMEOUT            0
 
 
 bool isPPMDataBeingReceived(void)
@@ -228,6 +227,17 @@ static void ppmEdgeCallback(timerCCHandlerRec_t* cbRec, captureCompare_t capture
 
 #define MAX_MISSED_PWM_EVENTS 10
 
+bool isPWMDataBeingReceived(void)
+{
+    int channel;
+    for (channel = 0; channel < PWM_PORTS_OR_PPM_CAPTURE_COUNT; channel++) {
+        if (captures[channel] != PPM_RCVR_TIMEOUT) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void pwmOverflowCallback(timerOvrHandlerRec_t* cbRec, captureCompare_t capture)
 {
     UNUSED(capture);
@@ -340,8 +350,12 @@ void ppmInConfig(const timerHardware_t *timerHardwarePtr)
     timerChConfigCallbacks(timerHardwarePtr, &self->edgeCb, &self->overflowCb);
 }
 
-uint16_t pwmRead(uint8_t channel)
+uint16_t ppmRead(uint8_t channel)
 {
     return captures[channel];
 }
 
+uint16_t pwmRead(uint8_t channel)
+{
+    return captures[channel];
+}

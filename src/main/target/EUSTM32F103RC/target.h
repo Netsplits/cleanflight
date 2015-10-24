@@ -35,6 +35,7 @@
 #define MPU6000_CS_PIN        GPIO_Pin_12
 #define MPU6000_SPI_INSTANCE  SPI2
 
+#define MPU6500_CS_GPIO_CLK_PERIPHERAL   RCC_APB2Periph_GPIOB
 #define MPU6500_CS_GPIO       GPIOB
 #define MPU6500_CS_PIN        GPIO_Pin_12
 #define MPU6500_SPI_INSTANCE  SPI2
@@ -121,9 +122,9 @@
 #define LED_STRIP_TIMER TIM3
 
 #define BLACKBOX
+#define GTUNE
 #define TELEMETRY
 #define SERIAL_RX
-#define AUTOTUNE
 #define USE_SERVOS
 #define USE_CLI
 

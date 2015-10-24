@@ -176,7 +176,7 @@ static void hmc5883lConfigureDataReadyInterruptHandling(void)
     }
 #endif
 
-    registerExti15_10_CallbackHandler(MAG_DATA_READY_EXTI_Handler);
+    registerExtiCallbackHandler(hmc5883Config->exti_irqn, MAG_DATA_READY_EXTI_Handler);
 
     EXTI_ClearITPendingBit(hmc5883Config->exti_line);
 
@@ -305,14 +305,19 @@ void hmc5883lInit(void)
     hmc5883lConfigureDataReadyInterruptHandling();
 }
 
-void hmc5883lRead(int16_t *magData)
+bool hmc5883lRead(int16_t *magData)
 {
     uint8_t buf[6];
 
-    i2cRead(MAG_ADDRESS, MAG_DATA_REGISTER, 6, buf);
+    bool ack = i2cRead(MAG_ADDRESS, MAG_DATA_REGISTER, 6, buf);
+    if (!ack) {
+        return false;
+    }
     // During calibration, magGain is 1.0, so the read returns normal non-calibrated values.
     // After calibration is done, magGain is set to calculated gain values.
     magData[X] = (int16_t)(buf[0] << 8 | buf[1]) * magGain[X];
     magData[Z] = (int16_t)(buf[2] << 8 | buf[3]) * magGain[Z];
     magData[Y] = (int16_t)(buf[4] << 8 | buf[5]) * magGain[Y];
+
+    return true;
 }
