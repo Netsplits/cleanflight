@@ -111,7 +111,6 @@ const uint16_t frSkyDataIdTable[] = {
     FSSP_DATAID_SPEED     ,
     FSSP_DATAID_VFAS      ,
     FSSP_DATAID_CURRENT   ,
-    //FSSP_DATAID_RPM       ,
     FSSP_DATAID_ALTITUDE  ,
     FSSP_DATAID_FUEL      ,
     //FSSP_DATAID_ADC1      ,
@@ -128,6 +127,7 @@ const uint16_t frSkyDataIdTable[] = {
     FSSP_DATAID_ACCZ      ,
     FSSP_DATAID_T1        ,
     FSSP_DATAID_T2        ,
+    FSSP_DATAID_RPM       ,
     FSSP_DATAID_GPS_ALT   ,
     0
 };
@@ -138,6 +138,10 @@ const uint16_t frSkyDataIdTable[] = {
 #define SMARTPORT_SERVICE_TIMEOUT_MS 1 // max allowed time to find a value to send
 #define SMARTPORT_NOT_CONNECTED_TIMEOUT_MS 7000
 
+#define IS_ENABLED(mask) (mask == 0 ? 0 : 1)
+#define IS_PID_CONTROLLER_FP_BASED(pidController) (pidController == 2)
+#define ADJUSTMENT_FUNCTION_CONFIG_INDEX_OFFSET 1
+
 static serialPort_t *smartPortSerialPort = NULL; // The 'SmartPort'(tm) Port.
 static serialPortConfig_t *portConfig;
 
@@ -146,6 +150,7 @@ static bool smartPortTelemetryEnabled =  false;
 static portSharing_e smartPortPortSharing;
 
 extern void serialInit(serialConfig_t *); // from main.c // FIXME remove this dependency
+bool isRangeActive(uint8_t auxChannelIndex, channelRange_t *range); // from rccontrols.c // FIXME remove this dependency
 
 char smartPortState = SPSTATE_UNINITIALIZED;
 static uint8_t smartPortHasRequest = 0;
@@ -229,7 +234,7 @@ void configureSmartPortTelemetryPort(void)
         return;
     }
 
-    portOptions = SERIAL_BIDIR;
+    portOptions = SERIAL_UNIDIR;//SERIAL_BIDIR;
 
     if (telemetryConfig->telemetry_inversion) {
         portOptions |= SERIAL_INVERTED;
@@ -310,9 +315,7 @@ void handleSmartPortTelemetry(void)
         }
         smartPortIdCnt++;
 
-        int32_t tmpi;
-        static uint8_t t1Cnt = 0;
-
+//        int32_t tmpi;
         switch(id) {
 #ifdef GPS
             case FSSP_DATAID_SPEED      :
@@ -398,12 +401,12 @@ void handleSmartPortTelemetry(void)
                 smartPortSendPackage(id, accSmooth[Z] / 44);
                 smartPortHasRequest = 0;
                 break;
-            case FSSP_DATAID_T1         :
+//            case FSSP_DATAID_T1         :
                 // we send all the flags as decimal digits for easy reading
 
                 // the t1Cnt simply allows the telemetry view to show at least some changes
-                t1Cnt++;
-                if (t1Cnt >= 4) {
+/*                t1Cnt++;
+                if (t1Cnt >= 3) {
                     t1Cnt = 1;
                 }
                 tmpi = t1Cnt * 10000; // start off with at least one digit so the most significant 0 won't be cut off
@@ -439,23 +442,213 @@ void handleSmartPortTelemetry(void)
                     tmpi += 2000;
                 if (FLIGHT_MODE(HEADFREE_MODE))
                     tmpi += 4000;
-
-                smartPortSendPackage(id, (uint32_t)tmpi);
-                smartPortHasRequest = 0;
-                break;
+                break;*/
             case FSSP_DATAID_T2         :
-                if (sensors(SENSOR_GPS)) {
-#ifdef GPS
-                    // provide GPS lock status
-                    smartPortSendPackage(id, (STATE(GPS_FIX) ? 1000 : 0) + (STATE(GPS_FIX_HOME) ? 2000 : 0) + GPS_numSat);
-                    smartPortHasRequest = 0;
-#endif
+    /*            
+                    if (sensors(SENSOR_GPS)) {
+    #ifdef GPS
+                        // provide GPS lock status
+                        smartPortSendPackage(id, (STATE(GPS_FIX) ? 1000 : 0) + (STATE(GPS_FIX_HOME) ? 2000 : 0) + GPS_numSat);
+                        smartPortHasRequest = 0;
+    #endif
+                    }
+                    else if (feature(FEATURE_GPS)) {
+                        smartPortSendPackage(id, 0);
+                        smartPortHasRequest = 0;
+                    }*/
+            {       // we send additional telemetry info
+                static uint8_t t2Cnt = 0;
+                static uint32_t tmpLua = 0;
+                uint16_t packet = 0;
+                static uint8_t tuningPID = 0;
+
+                // check if there is any tunning range active
+                if (t2Cnt == 5)
+                {
+                    uint8_t index;
+
+                    tmpLua = 0;
+                    for (index = 0; index < MAX_ADJUSTMENT_RANGE_COUNT; index++) {
+                        adjustmentRange_t *adjustmentRange = &currentProfile->adjustmentRanges[index]; //&adjustmentRanges[index];
+
+                        if (isRangeActive(adjustmentRange->auxChannelIndex, &adjustmentRange->range)) {
+//                            const adjustmentConfig_t *adjustmentConfig = &defaultAdjustmentConfigs[adjustmentRange->adjustmentFunction - ADJUSTMENT_FUNCTION_CONFIG_INDEX_OFFSET];
+    //                        configureAdjustment(adjustmentRange->adjustmentIndex, adjustmentRange->auxSwitchChannelIndex, adjustmentConfig);
+                            // Enable corresponding flags
+                            tmpLua = adjustmentRange->adjustmentFunction;
+
+                            if (tmpLua == 0) tuningPID++; else tuningPID = 0;
+                            if (tuningPID > 2) t2Cnt = 0;
+                            break;
+                        }
+                    }
                 }
-                else if (feature(FEATURE_GPS)) {
-                    smartPortSendPackage(id, 0);
-                    smartPortHasRequest = 0;
+
+                switch(t2Cnt)
+                {
+                    case 0: // check point and protocol info
+                    // masterConfig.current_profile_index                    
+                        packet = 0x0100;
+                        packet |= masterConfig.current_profile_index;
+                        break;
+
+                    case 1: // mode flags MSB
+                        tmpLua = IS_ENABLED(FLIGHT_MODE(ANGLE_MODE)) << BOXANGLE |
+                                IS_ENABLED(FLIGHT_MODE(HORIZON_MODE)) << BOXHORIZON |
+                                IS_ENABLED(FLIGHT_MODE(BARO_MODE)) << BOXBARO |
+                                IS_ENABLED(FLIGHT_MODE(MAG_MODE)) << BOXMAG |
+                                IS_ENABLED(FLIGHT_MODE(HEADFREE_MODE)) << BOXHEADFREE |
+                                IS_ENABLED(IS_RC_MODE_ACTIVE(BOXHEADADJ)) << BOXHEADADJ |
+                                IS_ENABLED(IS_RC_MODE_ACTIVE(BOXCAMSTAB)) << BOXCAMSTAB |
+                                IS_ENABLED(IS_RC_MODE_ACTIVE(BOXCAMTRIG)) << BOXCAMTRIG |
+                                IS_ENABLED(FLIGHT_MODE(GPS_HOME_MODE)) << BOXGPSHOME |
+                                IS_ENABLED(FLIGHT_MODE(GPS_HOLD_MODE)) << BOXGPSHOLD |
+                                IS_ENABLED(FLIGHT_MODE(PASSTHRU_MODE)) << BOXPASSTHRU |
+                                IS_ENABLED(IS_RC_MODE_ACTIVE(BOXBEEPERON)) << BOXBEEPERON |
+                                IS_ENABLED(IS_RC_MODE_ACTIVE(BOXLEDMAX)) << BOXLEDMAX |
+                                IS_ENABLED(IS_RC_MODE_ACTIVE(BOXLEDLOW)) << BOXLEDLOW |
+                                IS_ENABLED(IS_RC_MODE_ACTIVE(BOXLLIGHTS)) << BOXLLIGHTS |
+                                IS_ENABLED(IS_RC_MODE_ACTIVE(BOXCALIB)) << BOXCALIB |
+                                IS_ENABLED(IS_RC_MODE_ACTIVE(BOXGOV)) << BOXGOV |
+                                IS_ENABLED(IS_RC_MODE_ACTIVE(BOXOSD)) << BOXOSD |
+                                IS_ENABLED(IS_RC_MODE_ACTIVE(BOXTELEMETRY)) << BOXTELEMETRY |
+                                IS_ENABLED(IS_RC_MODE_ACTIVE(BOXAUTOTUNE)) << BOXAUTOTUNE |
+                                IS_ENABLED(FLIGHT_MODE(SONAR_MODE)) << BOXSONAR |
+                                IS_ENABLED(ARMING_FLAG(ARMED)) << BOXARM;
+
+                        packet = (uint16_t)tmpLua;
+                        break;
+
+                    case 2: // mode flags LSB
+                        packet = (uint16_t)(tmpLua >> 12);
+                        break;
+
+                    case 3: // num gps satellites and arming flags
+                        packet = GPS_numSat | (armingFlags << 8);
+                        break;
+
+                    case 4: // state flags
+                        packet = stateFlags;
+                        break;
+
+                    case 5: // PID tunning selected MSB
+                        packet = (uint16_t)tmpLua;
+                        break;
+
+/*                    case 6: // PID tunning selected LSB
+                        packet = (uint16_t)(tmpLua >> 12);
+                        break;*/
+
+                    case 6: // PID tunning values (Roll P)
+                        if (IS_PID_CONTROLLER_FP_BASED(currentProfile->pidProfile.pidController)) {
+                            packet = constrain(lrintf(currentProfile->pidProfile.P_f[PIDROLL] * 10.0f), 0, 250);
+                        } else {
+                            packet = currentProfile->pidProfile.P8[PIDROLL];
+                        }
+                        break;
+
+                    case 7: // PID tunning values (Roll I)
+                        if (IS_PID_CONTROLLER_FP_BASED(currentProfile->pidProfile.pidController)) {
+                            packet = constrain(lrintf(currentProfile->pidProfile.I_f[PIDROLL] * 100.0f), 0, 250);
+                        } else {
+                            packet = currentProfile->pidProfile.I8[PIDROLL];
+                        }
+                        break;
+
+                    case 8: // PID tunning values (Roll D)
+                        if (IS_PID_CONTROLLER_FP_BASED(currentProfile->pidProfile.pidController)) {
+                            packet = constrain(lrintf(currentProfile->pidProfile.D_f[PIDROLL] * 1000.0f), 0, 100);
+                        } else {
+                            packet = currentProfile->pidProfile.D8[PIDROLL];
+                        }
+                        break;
+
+                    case 9: // PID tunning values (Pitch P)
+                        if (IS_PID_CONTROLLER_FP_BASED(currentProfile->pidProfile.pidController)) {
+                            packet = constrain(lrintf(currentProfile->pidProfile.P_f[PIDPITCH] * 10.0f), 0, 250);
+                        } else {
+                            packet = currentProfile->pidProfile.P8[PIDPITCH];
+                        }
+                        break;
+
+                    case 10: // PID tunning values (Pitch I)
+                        if (IS_PID_CONTROLLER_FP_BASED(currentProfile->pidProfile.pidController)) {
+                            packet = constrain(lrintf(currentProfile->pidProfile.I_f[PIDPITCH] * 100.0f), 0, 250);
+                        } else {
+                            packet = currentProfile->pidProfile.I8[PIDPITCH];
+                        }
+                        break;
+
+                    case 11: // PID tunning values (Pitch D)
+                        if (IS_PID_CONTROLLER_FP_BASED(currentProfile->pidProfile.pidController)) {
+                            packet = constrain(lrintf(currentProfile->pidProfile.D_f[PIDPITCH] * 1000.0f), 0, 100);
+                        } else {
+                            packet = currentProfile->pidProfile.D8[PIDPITCH];
+                        }
+                        break;
+
+                    case 12: // PID tunning values (Yaw P)
+                        if (IS_PID_CONTROLLER_FP_BASED(currentProfile->pidProfile.pidController)) {
+                            packet = constrain(lrintf(currentProfile->pidProfile.P_f[PIDYAW] * 10.0f), 0, 250);
+                        } else {
+                            packet = currentProfile->pidProfile.P8[PIDYAW];
+                        }
+                        break;
+
+                    case 13: // PID tunning values (Yaw I)
+                        if (IS_PID_CONTROLLER_FP_BASED(currentProfile->pidProfile.pidController)) {
+                            packet = constrain(lrintf(currentProfile->pidProfile.I_f[PIDYAW] * 100.0f), 0, 250);
+                        } else {
+                            packet = currentProfile->pidProfile.I8[PIDYAW];
+                        }
+                        break;
+
+                    case 14: // PID tunning values (Yaw D)
+                        if (IS_PID_CONTROLLER_FP_BASED(currentProfile->pidProfile.pidController)) {
+                            packet = constrain(lrintf(currentProfile->pidProfile.D_f[PIDYAW] * 1000.0f), 0, 100);
+                        } else {
+                            packet = currentProfile->pidProfile.D8[PIDYAW];
+                        }
+                        break;
+
+/*                        case 3: // gps home longitude coord
+                        // the MSB of the sent uint32_t helps FrSky keep track
+                        // the even/odd bit of our counter helps us keep track
+                        tmpLua = abs(GPS_home[LON]);  // now we have unsigned value and one bit to spare
+                        tmpLua = (tmpLua + tmpLua / 2) / 25 | 0x80000000;  // 6/100 = 1.5/25, division by power of 2 is fast
+                        if (GPS_home[LON] < 0) tmpLua |= 0x40000000;
+                        break;
+
+                    case 4: // gps home latitude coord
+                        tmpLua = abs(GPS_home[LAT]);  // now we have unsigned value and one bit to spare
+                        tmpLua = (tmpLua + tmpLua / 2) / 25;  // 6/100 = 1.5/25, division by power of 2 is fast
+                        if (GPS_home[LAT] < 0) tmpLua |= 0x40000000;
+                        break;*/
                 }
+
+                packet = packet & 0x0FFF;
+                packet = packet | (t2Cnt << 12);
+
+                smartPortSendPackage(id, packet);
+                smartPortHasRequest = 0;
+
+                t2Cnt++;
+                if (t2Cnt > 14) t2Cnt = 0;
+
+
+/*                static uint8_t t2Repeat = 0;
+
+                t2Repeat++;
+                if (t2Repeat > 2)
+                {
+                    t2Repeat = 0;
+                    t2Cnt++;
+                    if (t2Cnt > 15) t2Cnt = 0;
+                }*/
+
                 break;
+            }
+
 #ifdef GPS
             case FSSP_DATAID_GPS_ALT    :
                 if (sensors(SENSOR_GPS) && STATE(GPS_FIX)) {
